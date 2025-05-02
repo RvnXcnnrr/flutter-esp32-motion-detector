@@ -16,13 +16,16 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   List<MotionEvent> _motionLogs = [];
-  DateTime? _selectedDate;
+  DateTime _selectedDate = DateTime.now().toLocal();
+  DateTime _focusedDay = DateTime.now().toLocal();
  
   Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
+    _selectedDate = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+    _focusedDay = DateTime(_focusedDay.year, _focusedDay.month, _focusedDay.day);
     _fetchMotionEvents();
     _refreshTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
       _fetchMotionEvents();
@@ -72,15 +75,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 }
 
   List<MotionEvent> get _filteredMotionLogs {
-    if (_selectedDate == null) {
-      return _motionLogs;
-    } else {
-      return _motionLogs.where((event) {
-        return event.timestamp.year == _selectedDate!.year &&
-               event.timestamp.month == _selectedDate!.month &&
-               event.timestamp.day == _selectedDate!.day;
-      }).toList();
-    }
+    return _motionLogs.where((event) {
+      return event.timestamp.year == _selectedDate.year &&
+             event.timestamp.month == _selectedDate.month &&
+             event.timestamp.day == _selectedDate.day;
+    }).toList();
   }
 
   Set<DateTime> get _motionEventDates {
@@ -110,16 +109,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 TableCalendar(
                   firstDay: DateTime.utc(2020, 1, 1),
                   lastDay: DateTime.utc(2030, 12, 31),
-                  focusedDay: _selectedDate ?? DateTime.now(),
+                  focusedDay: _focusedDay,
                   selectedDayPredicate: (day) {
-                    return _selectedDate != null &&
-                        day.year == _selectedDate!.year &&
-                        day.month == _selectedDate!.month &&
-                        day.day == _selectedDate!.day;
+                    final selected = _selectedDate;
+                    return day.year == selected.year &&
+                        day.month == selected.month &&
+                        day.day == selected.day;
                   },
                   onDaySelected: (selectedDay, focusedDay) {
                     setState(() {
                       _selectedDate = selectedDay;
+                      _focusedDay = focusedDay;
                     });
                   },
                   calendarBuilders: CalendarBuilders(
