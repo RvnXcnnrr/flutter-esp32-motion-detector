@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:table_calendar/table_calendar.dart';
 import '../models/motion_event.dart';
+import '../models/environment_data.dart';
 import '../providers/theme_provider.dart';
 import '../widgets/motion_log_tile.dart';
 import '../services/backend_service.dart';
@@ -18,13 +19,14 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   List<MotionEvent> _motionLogs = [];
+  EnvironmentData? _currentEnvironment;
   DateTime _selectedDate = DateTime.now().toLocal();
   DateTime _focusedDay = DateTime.now().toLocal();
-  double _currentTemperature = 23.5; // Example temperature value
-  double _currentHumidity = 45.0;    // Example humidity value
   bool _isLoading = false;
   Timer? _refreshTimer;
   Timer? _envRefreshTimer;
+  int _currentPage = 0;
+  final int _itemsPerPage = 4;
 
   @override
   void initState() {
@@ -49,12 +51,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _fetchEnvironmentData() async {
-    // In a real app, you would fetch this from your DHT22 sensor
-    // For now, we'll simulate small variations in the values
-    setState(() {
-      _currentTemperature = 23.5 + (DateTime.now().second % 10) * 0.1;
-      _currentHumidity = 45.0 + (DateTime.now().second % 10) * 0.5;
-    });
+    try {
+      final data = await BackendService.getLatestEnvironmentData();
+      if (!mounted) return;
+      setState(() {
+        _currentEnvironment = data;
+      });
+    } catch (e) {
+      debugPrint('Error fetching environment data: $e');
+    }
   }
 
   Future<void> _fetchMotionEvents() async {
@@ -65,6 +70,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     try {
       events = await BackendService.getMotionEvents();
+      // Sort events by timestamp in descending order (newest first)
+      events.sort((a, b) => b.timestamp.compareTo(a.timestamp));
       debugPrint('Fetched ${events.length} motion events');
 
       if (!mounted) return;
@@ -85,6 +92,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         setState(() {
           _isLoading = true;
           _motionLogs = events;
+          _currentPage = 0;
         });
         await Future.delayed(const Duration(milliseconds: 500));
         if (mounted) {
@@ -103,9 +111,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<MotionEvent> get _filteredMotionLogs {
     return _motionLogs.where((event) {
       return event.timestamp.year == _selectedDate.year &&
-             event.timestamp.month == _selectedDate.month &&
-             event.timestamp.day == _selectedDate.day;
+          event.timestamp.month == _selectedDate.month &&
+          event.timestamp.day == _selectedDate.day;
     }).toList();
+  }
+
+  List<MotionEvent> get _paginatedMotionLogs {
+    final filtered = _filteredMotionLogs;
+    final startIndex = _currentPage * _itemsPerPage;
+    if (startIndex >= filtered.length) {
+      return [];
+    }
+    final endIndex = (startIndex + _itemsPerPage).clamp(0, filtered.length);
+    return filtered.sublist(startIndex, endIndex);
+  }
+
+  int get _totalPages {
+    return (_filteredMotionLogs.length / _itemsPerPage).ceil();
   }
 
   Set<DateTime> get _motionEventDates {
@@ -126,44 +148,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
           IconButton(
             icon: const Icon(Icons.delete_forever),
             tooltip: 'Delete All Motion Events',
-              onPressed: () async {
-                final confirm = await showDialog<bool>(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('Confirm Delete All'),
-                    content: const Text('Are you sure you want to delete all motion events?'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(false),
-                        child: const Text('Cancel'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(true),
-                        child: const Text('Delete All'),
-                      ),
-                    ],
-                  ),
-                );
-                if (confirm == true) {
-                  if (!mounted) return;
-                  final scaffoldMessenger = ScaffoldMessenger.of(context);
-                  try {
-                    for (final event in _motionLogs) {
-                      await BackendService.deleteMotionEvent(event.id);
-                    }
-                    if (!mounted) return;
-                    scaffoldMessenger.showSnackBar(
-                      const SnackBar(content: Text('All motion events deleted')),
-                    );
-                    _fetchMotionEvents();
-                  } catch (e) {
-                    if (!mounted) return;
-                    scaffoldMessenger.showSnackBar(
-                      SnackBar(content: Text('Failed to delete all motion events: \$e')),
-                    );
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('Confirm Delete All'),
+                  content: const Text('Are you sure you want to delete all motion events?'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(false),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(true),
+                      child: const Text('Delete All'),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm == true) {
+                if (!mounted) return;
+                final scaffoldMessenger = ScaffoldMessenger.of(context);
+                try {
+                  for (final event in _motionLogs) {
+                    await BackendService.deleteMotionEvent(event.id);
                   }
+                  if (!mounted) return;
+                  scaffoldMessenger.showSnackBar(
+                    const SnackBar(content: Text('All motion events deleted')),
+                  );
+                  _fetchMotionEvents();
+                } catch (e) {
+                  if (!mounted) return;
+                  scaffoldMessenger.showSnackBar(
+                    SnackBar(content: Text('Failed to delete all motion events: $e')),
+                  );
                 }
-              },
+              }
+            },
           ),
         ],
       ),
@@ -226,7 +248,67 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       body: Column(
         children: [
-          // Environment Data Cards
+          // Calendar at the top
+          Card(
+            margin: const EdgeInsets.all(8),
+            elevation: 4,
+            child: TableCalendar(
+              firstDay: DateTime.utc(2020, 1, 1),
+              lastDay: DateTime.utc(2030, 12, 31),
+              focusedDay: _focusedDay,
+              availableCalendarFormats: const {
+                CalendarFormat.month: 'Month',
+              },
+              selectedDayPredicate: (day) {
+                final selected = _selectedDate;
+                return day.year == selected.year &&
+                    day.month == selected.month &&
+                    day.day == selected.day;
+              },
+              onDaySelected: (selectedDay, focusedDay) {
+                setState(() {
+                  _selectedDate = selectedDay;
+                  _focusedDay = focusedDay;
+                  _currentPage = 0;
+                });
+              },
+              calendarBuilders: CalendarBuilders(
+                defaultBuilder: (context, day, focusedDay) {
+                  if (_motionEventDates.contains(DateTime(day.year, day.month, day.day))) {
+                    return Container(
+                      margin: const EdgeInsets.all(6.0),
+                      decoration: BoxDecoration(
+                        color: Colors.blueAccent.withAlpha(128),
+                        shape: BoxShape.circle,
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        '${day.day}',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    );
+                  }
+                  return null;
+                },
+                selectedBuilder: (context, day, focusedDay) {
+                  return Container(
+                    margin: const EdgeInsets.all(6.0),
+                    decoration: BoxDecoration(
+                      color: Colors.deepOrange,
+                      shape: BoxShape.circle,
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      '${day.day}',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+
+          // Temperature and Humidity Cards
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
             child: Row(
@@ -261,7 +343,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            '${_currentTemperature.toStringAsFixed(1)}°C',
+                            _currentEnvironment != null 
+                              ? '${_currentEnvironment!.temperature.toStringAsFixed(1)}°C'
+                              : '--.-°C',
                             style: TextStyle(
                               fontSize: 28,
                               fontWeight: FontWeight.bold,
@@ -269,12 +353,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             ),
                           ),
                           LinearProgressIndicator(
-                            value: _currentTemperature / 50, // Assuming max temp is 50°C
+                            value: _currentEnvironment != null 
+                              ? _currentEnvironment!.temperature / 50 
+                              : 0.0,
                             backgroundColor: isDarkMode ? Colors.grey[600] : Colors.grey[300],
                             valueColor: AlwaysStoppedAnimation<Color>(
-                              _currentTemperature > 30 
+                              _currentEnvironment != null && _currentEnvironment!.temperature > 30 
                                 ? Colors.red 
-                                : (_currentTemperature < 20 ? Colors.blue : Colors.green),
+                                : (_currentEnvironment != null && _currentEnvironment!.temperature < 20 
+                                    ? Colors.blue 
+                                    : Colors.green),
                             ),
                           ),
                         ],
@@ -313,7 +401,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            '${_currentHumidity.toStringAsFixed(1)}%',
+                            _currentEnvironment != null
+                              ? '${_currentEnvironment!.humidity.toStringAsFixed(1)}%'
+                              : '--.-%',
                             style: TextStyle(
                               fontSize: 28,
                               fontWeight: FontWeight.bold,
@@ -321,12 +411,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             ),
                           ),
                           LinearProgressIndicator(
-                            value: _currentHumidity / 100,
+                            value: _currentEnvironment != null 
+                              ? _currentEnvironment!.humidity / 100 
+                              : 0.0,
                             backgroundColor: isDarkMode ? Colors.grey[600] : Colors.grey[300],
                             valueColor: AlwaysStoppedAnimation<Color>(
-                              _currentHumidity > 70 
+                              _currentEnvironment != null && _currentEnvironment!.humidity > 70 
                                 ? Colors.blue 
-                                : (_currentHumidity < 30 ? Colors.amber : Colors.teal),
+                                : (_currentEnvironment != null && _currentEnvironment!.humidity < 30 
+                                    ? Colors.amber 
+                                    : Colors.teal),
                             ),
                           ),
                         ],
@@ -337,108 +431,120 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ],
             ),
           ),
-          TableCalendar(
-            firstDay: DateTime.utc(2020, 1, 1),
-            lastDay: DateTime.utc(2030, 12, 31),
-            focusedDay: _focusedDay,
-            availableCalendarFormats: const {
-              CalendarFormat.month: 'Month',
-            },
-            selectedDayPredicate: (day) {
-              final selected = _selectedDate;
-              return day.year == selected.year &&
-                  day.month == selected.month &&
-                  day.day == selected.day;
-            },
-            onDaySelected: (selectedDay, focusedDay) {
-              setState(() {
-                _selectedDate = selectedDay;
-                _focusedDay = focusedDay;
-              });
-            },
-            calendarBuilders: CalendarBuilders(
-              defaultBuilder: (context, day, focusedDay) {
-                if (_motionEventDates.contains(DateTime(day.year, day.month, day.day))) {
-                  return Container(
-                    margin: const EdgeInsets.all(6.0),
-                    decoration: BoxDecoration(
-                      color: Colors.blueAccent.withAlpha(128),
-                      shape: BoxShape.circle,
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      '${day.day}',
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                  );
-                }
-                return null;
-              },
-              selectedBuilder: (context, day, focusedDay) {
-                return Container(
-                  margin: const EdgeInsets.all(6.0),
-                  decoration: BoxDecoration(
-                    color: Colors.deepOrange,
-                    shape: BoxShape.circle,
+
+          // Motion Detected List Header
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Motion Detected',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: isDarkMode ? Colors.white : Colors.black,
                   ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    '${day.day}',
-                    style: const TextStyle(color: Colors.white),
+                ),
+                if (_totalPages > 1)
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: Icon(Icons.arrow_back_ios, 
+                            size: 16, 
+                            color: _currentPage > 0 
+                                ? (isDarkMode ? Colors.white : Colors.black) 
+                                : Colors.grey),
+                        onPressed: _currentPage > 0
+                            ? () {
+                                setState(() {
+                                  _currentPage--;
+                                });
+                              }
+                            : null,
+                      ),
+                      Text(
+                        '${_currentPage + 1}/$_totalPages',
+                        style: TextStyle(
+                          color: isDarkMode ? Colors.white : Colors.black,
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.arrow_forward_ios, 
+                            size: 16, 
+                            color: _currentPage < _totalPages - 1
+                                ? (isDarkMode ? Colors.white : Colors.black) 
+                                : Colors.grey),
+                        onPressed: _currentPage < _totalPages - 1
+                            ? () {
+                                setState(() {
+                                  _currentPage++;
+                                });
+                              }
+                            : null,
+                      ),
+                    ],
                   ),
-                );
-              },
+              ],
             ),
           ),
+
+          // Motion Detected List
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _filteredMotionLogs.isEmpty
-                    ? const Center(child: Text('No motion detected for selected date.'))
+                    ? Center(
+                        child: Text(
+                          'No motion detected for selected date.',
+                          style: TextStyle(
+                            color: isDarkMode ? Colors.white : Colors.black,
+                          ),
+                        ),
+                      )
                     : ListView.builder(
-                        itemCount: _filteredMotionLogs.length,
+                        itemCount: _paginatedMotionLogs.length,
                         itemBuilder: (context, index) {
-                          final reversedIndex = _filteredMotionLogs.length - 1 - index;
-                          final event = _filteredMotionLogs[reversedIndex];
+                          final event = _paginatedMotionLogs[index];
                           return MotionLogTile(
                             event: event,
-                            number: index + 1,
+                            number: (_currentPage * _itemsPerPage) + index + 1,
                             onDelete: () async {
-                                final confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (context) => AlertDialog(
-                                    title: const Text('Confirm Delete'),
-                                    content: const Text('Are you sure you want to delete this motion event?'),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () => Navigator.of(context).pop(false),
-                                        child: const Text('Cancel'),
-                                      ),
-                                      TextButton(
-                                        onPressed: () => Navigator.of(context).pop(true),
-                                        child: const Text('Delete'),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                                if (confirm == true) {
+                              final confirm = await showDialog<bool>(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  title: const Text('Confirm Delete'),
+                                  content: const Text('Are you sure you want to delete this motion event?'),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.of(context).pop(false),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    TextButton(
+                                      onPressed: () => Navigator.of(context).pop(true),
+                                      child: const Text('Delete'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirm == true) {
+                                if (!mounted) return;
+                                final scaffoldMessenger = ScaffoldMessenger.of(context);
+                                try {
+                                  await BackendService.deleteMotionEvent(event.id);
                                   if (!mounted) return;
-                                  final scaffoldMessenger = ScaffoldMessenger.of(context);
-                                  try {
-                                    await BackendService.deleteMotionEvent(event.id);
-                                    if (!mounted) return;
-                                    scaffoldMessenger.showSnackBar(
-                                      const SnackBar(content: Text('Motion event deleted')),
-                                    );
-                                    _fetchMotionEvents();
-                                  } catch (e) {
-                                    if (!mounted) return;
-                                    scaffoldMessenger.showSnackBar(
-                                      SnackBar(content: Text('Failed to delete motion event: \$e')),
-                                    );
-                                  }
+                                  scaffoldMessenger.showSnackBar(
+                                    const SnackBar(content: Text('Motion event deleted')),
+                                  );
+                                  _fetchMotionEvents();
+                                } catch (e) {
+                                  if (!mounted) return;
+                                  scaffoldMessenger.showSnackBar(
+                                    SnackBar(content: Text('Failed to delete motion event: $e')),
+                                  );
                                 }
-                              },
+                              }
+                            },
                           );
                         },
                       ),

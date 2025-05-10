@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/motion_event.dart';
+import '../models/environment_data.dart';
 
 class BackendService {
   static const String baseUrl = 'https://detector-backend.onrender.com';
-
 
   // Fetch all motion events
   static Future<List<MotionEvent>> getMotionEvents() async {
@@ -47,6 +47,19 @@ class BackendService {
 
     if (response.statusCode != 204) {
       throw Exception('Failed to delete motion event: ${response.statusCode}');
+    }
+  }
+
+  // Fetch latest environment data
+  static Future<EnvironmentData> getLatestEnvironmentData() async {
+    final uri = Uri.parse('$baseUrl/environment-data/latest');
+    final response = await http.get(uri);
+
+    if (response.statusCode == 200) {
+      final dynamic data = json.decode(response.body);
+      return EnvironmentData.fromJson(data);
+    } else {
+      throw Exception('Failed to load environment data: ${response.statusCode}');
     }
   }
 }
