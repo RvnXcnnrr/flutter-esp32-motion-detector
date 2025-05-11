@@ -2,21 +2,27 @@ from fastapi import FastAPI, HTTPException, Depends
 from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import List
+from pydantic import BaseModel
+from sqlalchemy import Column, Integer, DateTime, Float
 
 from database import SessionLocal, engine, Base
-from pydantic import BaseModel
 
 app = FastAPI()
 
-# SQLAlchemy model
-from sqlalchemy import Column, Integer, DateTime
-
+# SQLAlchemy models
 class MotionEvent(Base):
     __tablename__ = "motion_events"
     id = Column(Integer, primary_key=True, index=True)
     timestamp = Column(DateTime, index=True)
 
-# Pydantic schema for request/response
+class EnvironmentData(Base):
+    __tablename__ = "environment_data"
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime, index=True)
+    temperature = Column(Float)
+    humidity = Column(Float)
+
+# Pydantic schemas
 class MotionEventSchema(BaseModel):
     id: int
     timestamp: datetime
@@ -24,9 +30,25 @@ class MotionEventSchema(BaseModel):
     class Config:
         orm_mode = True
 
-# Pydantic schema for creating motion events (no id)
 class MotionEventCreate(BaseModel):
     timestamp: datetime
+
+    class Config:
+        orm_mode = True
+
+class EnvironmentDataSchema(BaseModel):
+    id: int
+    timestamp: datetime
+    temperature: float
+    humidity: float
+
+    class Config:
+        orm_mode = True
+
+class EnvironmentDataCreate(BaseModel):
+    timestamp: datetime
+    temperature: float
+    humidity: float
 
     class Config:
         orm_mode = True
@@ -50,6 +72,7 @@ def db_check(db: Session = Depends(get_db)):
     except Exception as e:
         return {"error": str(e)}
 
+# Motion Events Endpoints
 @app.get("/motion-events", response_model=List[MotionEventSchema])
 def get_motion_events(db: Session = Depends(get_db)):
     events = db.query(MotionEvent).all()
@@ -71,3 +94,28 @@ def delete_motion_event(event_id: int, db: Session = Depends(get_db)):
     db.delete(event)
     db.commit()
     return
+
+# Environment Data Endpoints
+@app.get("/environment-data", response_model=List[EnvironmentDataSchema])
+def get_environment_data(db: Session = Depends(get_db)):
+    data = db.query(EnvironmentData).order_by(EnvironmentData.timestamp.desc()).limit(100).all()
+    return data
+
+@app.post("/environment-data", response_model=EnvironmentDataSchema)
+def add_environment_data(data: EnvironmentDataCreate, db: Session = Depends(get_db)):
+    db_data = EnvironmentData(
+        timestamp=data.timestamp,
+        temperature=data.temperature,
+        humidity=data.humidity
+    )
+    db.add(db_data)
+    db.commit()
+    db.refresh(db_data)
+    return db_data
+
+@app.get("/environment-data/latest", response_model=EnvironmentDataSchema)
+def get_latest_environment_data(db: Session = Depends(get_db)):
+    data = db.query(EnvironmentData).order_by(EnvironmentData.timestamp.desc()).first()
+    if not data:
+        raise HTTPException(status_code=404, detail="No environment data found")
+    return data
